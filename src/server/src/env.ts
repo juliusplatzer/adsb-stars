@@ -1,0 +1,130 @@
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_HTTP_PORT = 8080;
+const DEFAULT_ADSBLOL_BASE_URL = "https://api.adsb.lol";
+const DEFAULT_ADSBLOL_SEARCH_PATH = "/v2/lat/{lat}/lon/{lon}/dist/{radius}";
+const DEFAULT_FR24_BASE_URL = "https://fr24api.flightradar24.com";
+const DEFAULT_FR24_LIVE_FULL_PATH = "/api/live/flight-positions/full";
+const DEFAULT_FR24_ACCEPT_VERSION = "v1";
+const DEFAULT_AVWX_BASE_URL = "https://aviationweather.gov";
+const DEFAULT_AVWX_METAR_PATH = "/api/data/metar";
+const DEFAULT_AVWX_CACHE_TTL_MS = 60_000;
+const DEFAULT_WX_SAMPLES_URL =
+  "https://mapservices.weather.noaa.gov/eventdriven/rest/services/radar/radar_base_reflectivity_time/ImageServer/getSamples";
+const DEFAULT_WX_MAX_CELLS = 40_000;
+const DEFAULT_WX_REQUEST_CHUNK_SIZE = 1_000;
+
+export interface ServerConfig {
+  pollIntervalMs: number;
+  port: number;
+  centerLat: number;
+  centerLon: number;
+  radiusNm: number;
+  adsbLol: {
+    baseUrl: string;
+    searchPathTemplate: string;
+  };
+  fr24: {
+    baseUrl: string;
+    liveFullPath: string;
+    apiToken: string | null;
+    acceptVersion: string;
+    bounds: string;
+  };
+  aviationWeather: {
+    baseUrl: string;
+    metarPath: string;
+    cacheTtlMs: number;
+  };
+  wxReflectivity: {
+    samplesUrl: string;
+    maxCells: number | null;
+    requestChunkSize: number;
+  };
+}
+
+function readRequiredNumber(envKey: string): number {
+  const value = process.env[envKey];
+  if (!value) {
+    throw new Error(`Missing required environment variable ${envKey}`);
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Environment variable ${envKey} must be a valid number`);
+  }
+  return parsed;
+}
+
+function readOptionalNumber(envKey: string, fallback: number): number {
+  const value = process.env[envKey];
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Environment variable ${envKey} must be a valid number`);
+  }
+  return parsed;
+}
+
+function readOptionalNumberOrNull(envKey: string, fallback: number): number | null {
+  const value = process.env[envKey];
+  if (!value) {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "null" || normalized === "none" || normalized === "off" || normalized === "false" || normalized === "0") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Environment variable ${envKey} must be a valid number or null`);
+  }
+  return parsed;
+}
+
+function boundsFromCenter(centerLat: number, centerLon: number, radiusNm: number): string {
+  const latDelta = radiusNm / 60;
+  const lonScale = Math.cos((centerLat * Math.PI) / 180);
+  const lonDelta = lonScale > 0.000001 ? radiusNm / (60 * lonScale) : 180;
+  const north = Math.min(90, centerLat + latDelta);
+  const south = Math.max(-90, centerLat - latDelta);
+  const west = Math.max(-180, centerLon - lonDelta);
+  const east = Math.min(180, centerLon + lonDelta);
+  return `${north},${south},${west},${east}`;
+}
+
+export function loadConfig(): ServerConfig {
+  const centerLat = readRequiredNumber("CENTER_LAT");
+  const centerLon = readRequiredNumber("CENTER_LON");
+  const radiusNm = readRequiredNumber("RADIUS_NM");
+
+  return {
+    pollIntervalMs: readOptionalNumber("POLL_INTERVAL_MS", DEFAULT_POLL_INTERVAL_MS),
+    port: readOptionalNumber("PORT", DEFAULT_HTTP_PORT),
+    centerLat,
+    centerLon,
+    radiusNm,
+    adsbLol: {
+      baseUrl: process.env.ADSBLOL_BASE_URL ?? DEFAULT_ADSBLOL_BASE_URL,
+      searchPathTemplate: process.env.ADSBLOL_SEARCH_PATH_TEMPLATE ?? DEFAULT_ADSBLOL_SEARCH_PATH
+    },
+    fr24: {
+      baseUrl: process.env.FR24_BASE_URL ?? DEFAULT_FR24_BASE_URL,
+      liveFullPath: process.env.FR24_LIVE_FULL_PATH ?? DEFAULT_FR24_LIVE_FULL_PATH,
+      apiToken: process.env.FR24_API_TOKEN ?? process.env.FR24_API_KEY ?? null,
+      acceptVersion: process.env.FR24_ACCEPT_VERSION ?? DEFAULT_FR24_ACCEPT_VERSION,
+      bounds: process.env.FR24_BOUNDS ?? boundsFromCenter(centerLat, centerLon, radiusNm)
+    },
+    aviationWeather: {
+      baseUrl: process.env.AWX_BASE_URL ?? DEFAULT_AVWX_BASE_URL,
+      metarPath: process.env.AWX_METAR_PATH ?? DEFAULT_AVWX_METAR_PATH,
+      cacheTtlMs: readOptionalNumber("AWX_CACHE_TTL_MS", DEFAULT_AVWX_CACHE_TTL_MS)
+    },
+    wxReflectivity: {
+      samplesUrl: process.env.WX_REFLECTIVITY_SAMPLES_URL ?? DEFAULT_WX_SAMPLES_URL,
+      maxCells: readOptionalNumberOrNull("WX_REFLECTIVITY_MAX_CELLS", DEFAULT_WX_MAX_CELLS),
+      requestChunkSize: readOptionalNumber("WX_REFLECTIVITY_REQUEST_CHUNK_SIZE", DEFAULT_WX_REQUEST_CHUNK_SIZE)
+    }
+  };
+}

@@ -1,4 +1,7 @@
 import { createServer } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./env.js";
 import { AdsbLolClient } from "./adsb-lol-client.js";
 import { AircraftFeedService } from "./aircraft-feed-service.js";
@@ -6,6 +9,36 @@ import { Fr24Client } from "./fr24-client.js";
 import { QnhService } from "./qnh-service.js";
 import { WxRadarService } from "./wx-radar-service.js";
 
+function loadLocalEnv(): void {
+  const envPath = join(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+  if (!existsSync(envPath)) {
+    return;
+  }
+  const contents = readFileSync(envPath, "utf8");
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const equalIndex = line.indexOf("=");
+    if (equalIndex === -1) {
+      continue;
+    }
+    const key = line.slice(0, equalIndex).trim();
+    let value = line.slice(equalIndex + 1).trim();
+    if (!key) {
+      continue;
+    }
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadLocalEnv();
 const config = loadConfig();
 const MAX_WX_RADIUS_NM = 150;
 

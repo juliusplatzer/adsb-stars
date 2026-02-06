@@ -184,7 +184,29 @@ export class Fr24Client {
     });
 
     if (!response.ok) {
-      throw new Error(`FR24 request failed with ${response.status}`);
+      const status = response.status;
+      let detail = "Unexpected response";
+      switch (status) {
+        case 400:
+          detail = "Bad Request (check request parameters)";
+          break;
+        case 401:
+          detail = "Unauthorized (check FR24 API token)";
+          break;
+        case 402:
+          detail = "Insufficient credits (check subscription/top-up)";
+          break;
+        case 404:
+          detail = "Not Found (resource does not exist)";
+          break;
+        case 500:
+          detail = "Internal Server Error (FR24)";
+          break;
+        default:
+          detail = `HTTP ${status}`;
+          break;
+      }
+      throw new Error(`FR24 request failed: ${detail}`);
     }
 
     const payload = (await response.json()) as unknown;

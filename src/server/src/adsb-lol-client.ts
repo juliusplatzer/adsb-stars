@@ -113,7 +113,9 @@ export class AdsbLolClient {
     const response = await fetch(url);
 
     if (!response.ok) {
-      throw new Error(`ADSB.lol request failed with ${response.status}`);
+      const {status} = response;
+      const detail = status === 422 ? "Validation error (check lat/lon/radius)" : `HTTP ${status}`;
+      throw new Error(`ADSB.lol request failed: ${detail}`);
     }
 
     const payload = (await response.json()) as unknown;

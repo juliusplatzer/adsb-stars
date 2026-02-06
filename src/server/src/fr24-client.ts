@@ -5,11 +5,9 @@ interface Fr24ClientConfig {
   liveFullPath: string;
   apiToken: string | null;
   acceptVersion: string;
-  bounds: string;
 }
 
 interface Fr24FlightRecord {
-  id: string | null;
   hex: string | null;
   callsign: string | null;
   destinationIata: string | null;
@@ -43,65 +41,23 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
-function extractDestinationIata(record: Record<string, unknown>): string | null {
-  const destination = asObject(record.destination);
-  const route = asObject(record.route);
-  const airports = asObject(record.airports);
-  const routeDestination = asObject(route?.destination);
-  const airportsDestination = asObject(airports?.destination);
-
-  const candidates: unknown[] = [
-    record.destination_iata,
-    record.destinationIata,
-    destination?.iata,
-    routeDestination?.iata,
-    airportsDestination?.iata
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = normalizeIata(toStringOrNull(candidate));
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return null;
-}
-
 function extractFlightRecord(raw: unknown): Fr24FlightRecord | null {
   const record = asObject(raw);
   if (!record) {
     return null;
   }
 
-  const identification = asObject(record.identification);
-  const hexObject = asObject(record.hex);
-  const flightObject = asObject(record.flight);
-
-  const id = normalizeKey(
-    toStringOrNull(record.id) ??
-      toStringOrNull(record.flight_id) ??
-      toStringOrNull(record.flightId) ??
-      toStringOrNull(identification?.id)
+  const destinationIata = normalizeIata(
+    toStringOrNull(record.dest_iata ?? record.destination_iata ?? record.destinationIata)
   );
-  const hex = normalizeKey(
-    toStringOrNull(record.hex) ??
-      toStringOrNull(record.icao24) ??
-      toStringOrNull(hexObject?.code) ??
-      toStringOrNull(hexObject?.id)
-  );
-  const callsign = normalizeKey(
-    toStringOrNull(record.callsign) ??
-      toStringOrNull(record.flight) ??
-      toStringOrNull(flightObject?.number) ??
-      toStringOrNull((asObject(flightObject?.identification) ?? {}).callsign)
-  );
-
-  const destinationIata = extractDestinationIata(record);
   if (!destinationIata) {
     return null;
   }
 
-  return { id, hex, callsign, destinationIata };
+  const callsign = normalizeKey(toStringOrNull(record.callsign ?? record.flight));
+  const hex = normalizeKey(toStringOrNull(record.hex ?? record.icao24));
+
+  return { hex, callsign, destinationIata };
 }
 
 function extractRecords(payload: unknown): Fr24FlightRecord[] {
@@ -128,6 +84,7 @@ function extractRecords(payload: unknown): Fr24FlightRecord[] {
 export class Fr24Client {
   private readonly destinationByKey = new Map<string, string | null>();
   private refreshPromise: Promise<void> | null = null;
+  private readonly pendingCallsigns = new Set<string>();
 
   constructor(private readonly config: Fr24ClientConfig) {}
 
@@ -135,20 +92,10 @@ export class Fr24Client {
     return Boolean(this.config.apiToken);
   }
 
-  async fetchDestinationIata(aircraft: AdsbAircraft): Promise<string | null> {
-    if (!this.isEnabled()) {
-      return null;
-    }
-
+  getCachedDestination(aircraft: AdsbAircraft): string | null {
     const keys = [aircraft.id, aircraft.hex, aircraft.callsign].map(normalizeKey).filter((key): key is string => key !== null);
     const cached = this.readFromCache(keys);
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    await this.refreshLiveSnapshot();
-    const fromSnapshot = this.readFromCache(keys);
-    return fromSnapshot ?? null;
+    return cached ?? null;
   }
 
   private readFromCache(keys: string[]): string | null | undefined {
@@ -160,20 +107,41 @@ export class Fr24Client {
     return undefined;
   }
 
-  private async refreshLiveSnapshot(): Promise<void> {
+  async preloadDestinations(aircraftList: AdsbAircraft[]): Promise<void> {
+    if (!this.isEnabled()) {
+      return;
+    }
+
+    for (const aircraft of aircraftList) {
+      const callsign = normalizeKey(aircraft.callsign);
+      if (!callsign) {
+        continue;
+      }
+      if (!this.destinationByKey.has(callsign)) {
+        this.pendingCallsigns.add(callsign);
+      }
+    }
+
+    if (this.pendingCallsigns.size === 0) {
+      return;
+    }
+
     if (this.refreshPromise) {
       return this.refreshPromise;
     }
 
-    this.refreshPromise = this.refreshLiveSnapshotInternal().finally(() => {
+    const batch = Array.from(this.pendingCallsigns);
+    this.pendingCallsigns.clear();
+
+    this.refreshPromise = this.fetchDestinationsByCallsigns(batch).finally(() => {
       this.refreshPromise = null;
     });
     return this.refreshPromise;
   }
 
-  private async refreshLiveSnapshotInternal(): Promise<void> {
+  private async fetchDestinationsByCallsigns(callsigns: string[]): Promise<void> {
     const url = new URL(this.config.liveFullPath, this.config.baseUrl);
-    url.searchParams.set("bounds", this.config.bounds);
+    url.searchParams.set("callsigns", callsigns.join(","));
 
     const response = await fetch(url, {
       headers: {
@@ -212,14 +180,17 @@ export class Fr24Client {
     const payload = (await response.json()) as unknown;
     const records = extractRecords(payload);
     for (const record of records) {
-      if (record.id) {
-        this.destinationByKey.set(record.id, record.destinationIata);
-      }
       if (record.hex) {
         this.destinationByKey.set(record.hex, record.destinationIata);
       }
       if (record.callsign) {
         this.destinationByKey.set(record.callsign, record.destinationIata);
+      }
+    }
+
+    for (const callsign of callsigns) {
+      if (!this.destinationByKey.has(callsign)) {
+        this.destinationByKey.set(callsign, null);
       }
     }
   }

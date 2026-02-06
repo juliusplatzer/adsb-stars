@@ -94,8 +94,6 @@ function interpolatePosition(
 
 export class AircraftFeedService {
   private readonly tracks = new Map<string, FlightTrackState>();
-  private readonly destinations = new Map<string, string | null>();
-  private readonly destinationRequests = new Map<string, Promise<string | null>>();
   private latest: AircraftFeedResponse;
   private timer: NodeJS.Timeout | null = null;
   private pollInFlight = false;
@@ -143,6 +141,8 @@ export class AircraftFeedService {
         this.config.radiusNm
       );
       const airborne = inRange.filter((ac) => !ac.onGround);
+
+      await this.fr24Client.preloadDestinations(airborne);
 
       const activeIds = new Set(airborne.map((ac) => ac.id));
       for (const id of this.tracks.keys()) {
@@ -211,29 +211,6 @@ export class AircraftFeedService {
     if (!this.fr24Client.isEnabled()) {
       return null;
     }
-
-    if (this.destinations.has(aircraft.id)) {
-      return this.destinations.get(aircraft.id) ?? null;
-    }
-
-    const inFlight = this.destinationRequests.get(aircraft.id);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const request = this.fr24Client
-      .fetchDestinationIata(aircraft)
-      .catch((error) => {
-        console.error(`[fr24] destination lookup failed for ${aircraft.id}`, error);
-        return null;
-      })
-      .then((iata) => {
-        this.destinations.set(aircraft.id, iata);
-        this.destinationRequests.delete(aircraft.id);
-        return iata;
-      });
-
-    this.destinationRequests.set(aircraft.id, request);
-    return request;
+    return this.fr24Client.getCachedDestination(aircraft);
   }
 }

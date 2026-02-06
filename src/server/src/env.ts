@@ -28,6 +28,7 @@ export interface ServerConfig {
     liveFullPath: string;
     apiToken: string | null;
     acceptVersion: string;
+    bounds: string;
   };
   aviationWeather: {
     baseUrl: string;
@@ -39,6 +40,7 @@ export interface ServerConfig {
     maxCells: number | null;
     requestChunkSize: number;
   };
+  scopeConfigName: string | null;
 }
 
 function readRequiredNumber(envKey: string): number {
@@ -82,6 +84,27 @@ function readOptionalNumberOrNull(envKey: string, fallback: number): number | nu
   return parsed;
 }
 
+function readOptionalString(envKey: string): string | null {
+  const value = process.env[envKey];
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function boundsFromCenter(centerLat: number, centerLon: number, radiusNm: number): string {
+  const latDelta = radiusNm / 60;
+  const lonScale = Math.cos((centerLat * Math.PI) / 180);
+  const lonDelta = lonScale > 0.000001 ? radiusNm / (60 * lonScale) : 180;
+  const north = Math.min(90, centerLat + latDelta);
+  const south = Math.max(-90, centerLat - latDelta);
+  const west = Math.max(-180, centerLon - lonDelta);
+  const east = Math.min(180, centerLon + lonDelta);
+  const format = (value: number): string => value.toFixed(3);
+  return `${format(north)},${format(south)},${format(west)},${format(east)}`;
+}
+
 export function loadConfig(): ServerConfig {
   const centerLat = readRequiredNumber("CENTER_LAT");
   const centerLon = readRequiredNumber("CENTER_LON");
@@ -101,7 +124,8 @@ export function loadConfig(): ServerConfig {
       baseUrl: process.env.FR24_BASE_URL ?? DEFAULT_FR24_BASE_URL,
       liveFullPath: process.env.FR24_LIVE_FULL_PATH ?? DEFAULT_FR24_LIVE_FULL_PATH,
       apiToken: process.env.FR24_API_TOKEN ?? process.env.FR24_API_KEY ?? null,
-      acceptVersion: process.env.FR24_ACCEPT_VERSION ?? DEFAULT_FR24_ACCEPT_VERSION
+      acceptVersion: process.env.FR24_ACCEPT_VERSION ?? DEFAULT_FR24_ACCEPT_VERSION,
+      bounds: process.env.FR24_BOUNDS ?? boundsFromCenter(centerLat, centerLon, radiusNm)
     },
     aviationWeather: {
       baseUrl: process.env.AWX_BASE_URL ?? DEFAULT_AVWX_BASE_URL,
@@ -112,6 +136,7 @@ export function loadConfig(): ServerConfig {
       samplesUrl: process.env.WX_REFLECTIVITY_SAMPLES_URL ?? DEFAULT_WX_SAMPLES_URL,
       maxCells: readOptionalNumberOrNull("WX_REFLECTIVITY_MAX_CELLS", DEFAULT_WX_MAX_CELLS),
       requestChunkSize: readOptionalNumber("WX_REFLECTIVITY_REQUEST_CHUNK_SIZE", DEFAULT_WX_REQUEST_CHUNK_SIZE)
-    }
+    },
+    scopeConfigName: readOptionalString("SCOPE_CONFIG_NAME")
   };
 }

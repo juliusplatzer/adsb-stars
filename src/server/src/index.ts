@@ -42,9 +42,34 @@ loadLocalEnv();
 const config = loadConfig();
 const MAX_WX_RADIUS_NM = 150;
 
+function loadScopeAirports(scopeName: string | null): string[] {
+  if (!scopeName) {
+    return [];
+  }
+  const configPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "client",
+    "data",
+    "configs",
+    `${scopeName}.json`
+  );
+  if (!existsSync(configPath)) {
+    throw new Error(`Scope config not found: ${configPath}`);
+  }
+  const raw = readFileSync(configPath, "utf8");
+  const parsed = JSON.parse(raw) as { airports?: Record<string, unknown> };
+  if (!parsed.airports || typeof parsed.airports !== "object") {
+    return [];
+  }
+  return Object.keys(parsed.airports);
+}
+
+const fr24Client = new Fr24Client(config.fr24);
 const feedService = new AircraftFeedService(
   new AdsbLolClient(config.adsbLol),
-  new Fr24Client(config.fr24),
+  fr24Client,
   {
     pollIntervalMs: config.pollIntervalMs,
     center: {
@@ -54,6 +79,10 @@ const feedService = new AircraftFeedService(
     radiusNm: config.radiusNm
   }
 );
+const scopeAirports = loadScopeAirports(config.scopeConfigName);
+if (scopeAirports.length > 0) {
+  fr24Client.startAutoRefresh(scopeAirports, 20 * 60 * 1000);
+}
 feedService.start();
 const qnhService = new QnhService(config.aviationWeather);
 const wxReflectivityService = new WxRadarService(config.wxReflectivity);

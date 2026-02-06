@@ -142,8 +142,6 @@ export class AircraftFeedService {
       );
       const airborne = inRange.filter((ac) => !ac.onGround);
 
-      await this.fr24Client.preloadDestinations(airborne);
-
       const activeIds = new Set(airborne.map((ac) => ac.id));
       for (const id of this.tracks.keys()) {
         if (!activeIds.has(id)) {

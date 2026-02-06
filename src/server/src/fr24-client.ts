@@ -5,11 +5,11 @@ interface Fr24ClientConfig {
   liveFullPath: string;
   apiToken: string | null;
   acceptVersion: string;
+  bounds: string;
 }
 
 interface Fr24FlightRecord {
   hex: string | null;
-  callsign: string | null;
   destinationIata: string | null;
 }
 
@@ -54,10 +54,9 @@ function extractFlightRecord(raw: unknown): Fr24FlightRecord | null {
     return null;
   }
 
-  const callsign = normalizeKey(toStringOrNull(record.callsign ?? record.flight));
   const hex = normalizeKey(toStringOrNull(record.hex ?? record.icao24));
 
-  return { hex, callsign, destinationIata };
+  return { hex, destinationIata };
 }
 
 function extractRecords(payload: unknown): Fr24FlightRecord[] {
@@ -83,8 +82,9 @@ function extractRecords(payload: unknown): Fr24FlightRecord[] {
 
 export class Fr24Client {
   private readonly destinationByKey = new Map<string, string | null>();
-  private refreshPromise: Promise<void> | null = null;
-  private readonly pendingCallsigns = new Set<string>();
+  private preloadPromise: Promise<void> | null = null;
+  private preloadDone = false;
+  private refreshTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly config: Fr24ClientConfig) {}
 
@@ -93,55 +93,74 @@ export class Fr24Client {
   }
 
   getCachedDestination(aircraft: AdsbAircraft): string | null {
-    const keys = [aircraft.id, aircraft.hex, aircraft.callsign].map(normalizeKey).filter((key): key is string => key !== null);
-    const cached = this.readFromCache(keys);
-    return cached ?? null;
-  }
-
-  private readFromCache(keys: string[]): string | null | undefined {
-    for (const key of keys) {
-      if (this.destinationByKey.has(key)) {
-        return this.destinationByKey.get(key) ?? null;
-      }
+    const hex = normalizeKey(aircraft.hex);
+    if (!hex) {
+      return null;
     }
-    return undefined;
+    return this.destinationByKey.get(hex) ?? null;
   }
 
-  async preloadDestinations(aircraftList: AdsbAircraft[]): Promise<void> {
+  async preloadInboundAirports(airports: string[]): Promise<void> {
+    if (!this.isEnabled()) {
+      return;
+    }
+    if (this.preloadDone) {
+      return;
+    }
+    const unique = Array.from(
+      new Set(airports.map((code) => normalizeKey(code)).filter((code): code is string => code !== null))
+    );
+    if (unique.length === 0) {
+      this.preloadDone = true;
+      return;
+    }
+
+    if (this.preloadPromise) {
+      return this.preloadPromise;
+    }
+
+    this.preloadPromise = this.fetchInboundForAirports(unique).finally(() => {
+      this.preloadPromise = null;
+      this.preloadDone = true;
+    });
+    return this.preloadPromise;
+  }
+
+  private async fetchInboundForAirports(airports: string[]): Promise<void> {
+    for (const airport of airports) {
+      await this.fetchInboundForAirport(airport);
+    }
+  }
+
+  startAutoRefresh(airports: string[], intervalMs: number): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+    }
     if (!this.isEnabled()) {
       return;
     }
 
-    for (const aircraft of aircraftList) {
-      const callsign = normalizeKey(aircraft.callsign);
-      if (!callsign) {
-        continue;
-      }
-      if (!this.destinationByKey.has(callsign)) {
-        this.pendingCallsigns.add(callsign);
-      }
-    }
-
-    if (this.pendingCallsigns.size === 0) {
+    const unique = Array.from(
+      new Set(airports.map((code) => normalizeKey(code)).filter((code): code is string => code !== null))
+    );
+    if (unique.length === 0) {
       return;
     }
 
-    if (this.refreshPromise) {
-      return this.refreshPromise;
-    }
+    const tick = (): void => {
+      void this.fetchInboundForAirports(unique).catch((error) => {
+        console.error("[fr24] auto-refresh failed", error);
+      });
+    };
 
-    const batch = Array.from(this.pendingCallsigns);
-    this.pendingCallsigns.clear();
-
-    this.refreshPromise = this.fetchDestinationsByCallsigns(batch).finally(() => {
-      this.refreshPromise = null;
-    });
-    return this.refreshPromise;
+    tick();
+    this.refreshTimer = setInterval(tick, intervalMs);
   }
 
-  private async fetchDestinationsByCallsigns(callsigns: string[]): Promise<void> {
+  private async fetchInboundForAirport(airport: string): Promise<void> {
     const url = new URL(this.config.liveFullPath, this.config.baseUrl);
-    url.searchParams.set("callsigns", callsigns.join(","));
+    url.searchParams.set("airports", `inbound:${airport}`);
+    url.searchParams.set("bounds", this.config.bounds);
 
     const response = await fetch(url, {
       headers: {
@@ -152,7 +171,7 @@ export class Fr24Client {
     });
 
     if (!response.ok) {
-      const status = response.status;
+      const {status} = response;
       let detail = "Unexpected response";
       switch (status) {
         case 400:
@@ -182,15 +201,6 @@ export class Fr24Client {
     for (const record of records) {
       if (record.hex) {
         this.destinationByKey.set(record.hex, record.destinationIata);
-      }
-      if (record.callsign) {
-        this.destinationByKey.set(record.callsign, record.destinationIata);
-      }
-    }
-
-    for (const callsign of callsigns) {
-      if (!this.destinationByKey.has(callsign)) {
-        this.destinationByKey.set(callsign, null);
       }
     }
   }

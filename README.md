@@ -15,7 +15,7 @@ pnpm -r build
 
 - polls ADSB.lol every 5 seconds (configurable),
 - enriches each aircraft with RECAT wake category (A-I, NOWGT, UNKNOWN),
-- resolves destination IATA once per callsign/hex via FR24 and caches it,
+- resolves destination IATA via FR24 inbound-airport preloads and caches it,
 - tracks last 5 previous positions per flight id,
 - interpolates position when ADS-B returns the same coordinates on consecutive polls.
 
@@ -43,6 +43,8 @@ Optional env vars:
 - `FR24_LIVE_FULL_PATH` (default `/api/live/flight-positions/full`)
 - `FR24_API_TOKEN` (Bearer token for FR24)
 - `FR24_ACCEPT_VERSION` (default `v1`)
+- `FR24_BOUNDS` (`north,south,west,east`; default derived from center/radius, 3 decimals)
+- `SCOPE_CONFIG_NAME` (e.g. `N90` to load `src/client/data/configs/N90.json` and preload inbound flights)
 - `AWX_BASE_URL` (default `https://aviationweather.gov`)
 - `AWX_METAR_PATH` (default `/api/data/metar`)
 - `AWX_CACHE_TTL_MS` (default `60000`)

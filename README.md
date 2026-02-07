@@ -1,4 +1,4 @@
-### vstars
+### adsb-stars
 
 View ADS-B and MLAT flight traffic data in real-time on a STARS-like radar scope.
 

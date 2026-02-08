@@ -1,4 +1,4 @@
-// app/lib/bitmapFont.tsx
+// app/lib/bitmapFont.ts
 
 export type GlyphMetric = {
     sx: number; sy: number; w: number; h: number;

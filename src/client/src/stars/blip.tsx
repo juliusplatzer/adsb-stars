@@ -1,5 +1,6 @@
 import { loadBitmapFont, type LoadedBitmapFont } from "../lib/bitmapFont.js";
-import colors from "./colors.json";
+import type { PositionSample } from "@vstars/shared";
+import colors from "./colors.js";
 
 export type BlipGlyphColor = "GREEN" | "WHITE";
 
@@ -21,6 +22,11 @@ export interface BlipDrawInput extends BlipRuleInput {
 
 export interface BlipColors {
   searchTargetBlue: string;
+  histBlue1: string;
+  histBlue2: string;
+  histBlue3: string;
+  histBlue4: string;
+  histBlue5: string;
   green: string;
   white: string;
   black: string;
@@ -28,6 +34,11 @@ export interface BlipColors {
 
 const DEFAULT_COLORS: BlipColors = {
   searchTargetBlue: colors.SEARCH_TARGET_BLUE,
+  histBlue1: colors.HIST_BLUE_1,
+  histBlue2: colors.HIST_BLUE_2,
+  histBlue3: colors.HIST_BLUE_3,
+  histBlue4: colors.HIST_BLUE_4,
+  histBlue5: colors.HIST_BLUE_5,
   green: colors.GREEN,
   white: colors.WHITE,
   black: colors.BLACK
@@ -41,6 +52,19 @@ interface BlipFonts {
 export interface BlipResolvedCenterGlyph {
   kind: BlipCenterGlyphKind;
   letter: string | null;
+}
+
+export interface BlipProjectedPoint {
+  x: number;
+  y: number;
+}
+
+export type BlipHistoryPosition = PositionSample | BlipProjectedPoint;
+
+export interface BlipHistoryDrawOptions {
+  dotRadiusPx?: number;
+  maxDots?: number;
+  projectPosition?: (position: PositionSample) => BlipProjectedPoint | null;
 }
 
 function normalizeTcpLetter(value: string | null): string | null {
@@ -88,6 +112,10 @@ export function resolveBlipCenterGlyph(input: BlipRuleInput): BlipResolvedCenter
 
 function shapeFillColor(glyphColor: BlipGlyphColor, colors: BlipColors): string {
   return glyphColor === "WHITE" ? colors.white : colors.green;
+}
+
+function isPositionSample(position: BlipHistoryPosition): position is PositionSample {
+  return "lat" in position && "lon" in position;
 }
 
 // STARS symbol codepoints in the bitmap atlas.
@@ -190,6 +218,21 @@ export class RadarBlipRenderer {
     private readonly colors: BlipColors
   ) {}
 
+  private historyColorByIndex(index: number): string {
+    switch (index) {
+      case 0:
+        return this.colors.histBlue1;
+      case 1:
+        return this.colors.histBlue2;
+      case 2:
+        return this.colors.histBlue3;
+      case 3:
+        return this.colors.histBlue4;
+      default:
+        return this.colors.histBlue5;
+    }
+  }
+
   static async create(colors: Partial<BlipColors> = {}): Promise<RadarBlipRenderer> {
     const [fill, outline] = await Promise.all([
       loadBitmapFont("/font/sddCharFontSetASize1"),
@@ -233,5 +276,42 @@ export class RadarBlipRenderer {
     }
 
     return centerGlyph;
+  }
+
+  drawHistoryDots(
+    ctx: CanvasRenderingContext2D,
+    positions: readonly BlipHistoryPosition[],
+    options: BlipHistoryDrawOptions = {}
+  ): void {
+    if (positions.length === 0) {
+      return;
+    }
+
+    const dotRadiusPx = options.dotRadiusPx ?? 2;
+    const maxDots = Math.max(1, Math.min(5, options.maxDots ?? 5));
+    const recentFirst = [...positions].slice(-maxDots).reverse();
+
+    for (let index = 0; index < recentFirst.length; index += 1) {
+      const position = recentFirst[index];
+      let point: BlipProjectedPoint | null;
+
+      if (isPositionSample(position)) {
+        if (!options.projectPosition) {
+          continue;
+        }
+        point = options.projectPosition(position);
+      } else {
+        point = position;
+      }
+
+      if (!point) {
+        continue;
+      }
+
+      ctx.beginPath();
+      ctx.arc(Math.round(point.x), Math.round(point.y), dotRadiusPx, 0, Math.PI * 2);
+      ctx.fillStyle = this.historyColorByIndex(index);
+      ctx.fill();
+    }
   }
 }

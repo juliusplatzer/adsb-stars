@@ -3,6 +3,15 @@
 !.env.example
 !**/.env.example
 
+# Java / Maven build outputs
+target/
+**/target/
+**/*.class
+**/*.jar
+**/*.war
+**/*.ear
+**/dependency-reduced-pom.xml
+
 node_modules/
 **/node_modules/
 dist/

@@ -17,6 +17,8 @@ interface MetarRecord {
   observedAt: string | null;
 }
 
+const HPA_TO_INHG = 0.0295299830714;
+
 function toObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -56,8 +58,27 @@ function parseAltimeterFromRaw(rawMetar: string | null): number | null {
   const hpaMatch = rawMetar.match(/\bQ(\d{4})\b/);
   if (hpaMatch) {
     const hpa = Number(hpaMatch[1]);
-    return hpa * 0.0295299830714;
+    return hpa * HPA_TO_INHG;
   }
+  return null;
+}
+
+function normalizePressureToInHg(value: number): number | null {
+  // Typical QNH in hPa.
+  if (value >= 850 && value <= 1200) {
+    return value * HPA_TO_INHG;
+  }
+
+  // Typical altimeter setting in inHg.
+  if (value >= 20 && value <= 40) {
+    return value;
+  }
+
+  // Some feeds provide inHg * 100 (e.g., 2992 => 29.92).
+  if (value >= 2500 && value <= 3500) {
+    return value / 100;
+  }
+
   return null;
 }
 
@@ -74,7 +95,10 @@ function parseQnhInHg(record: Record<string, unknown>): number | null {
   for (const candidate of direct) {
     const value = toNumber(candidate);
     if (value !== null) {
-      return value;
+      const normalized = normalizePressureToInHg(value);
+      if (normalized !== null) {
+        return normalized;
+      }
     }
   }
 

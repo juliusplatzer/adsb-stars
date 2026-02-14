@@ -2,7 +2,6 @@ import type { AircraftFeedItem, AircraftFeedResponse, PositionSample } from "@vs
 import { recatForAircraftType } from "./recat.js";
 import type { AdsbAircraft } from "./adsb-lol-client.js";
 import { AdsbLolClient } from "./adsb-lol-client.js";
-import { Fr24Client } from "./fr24-client.js";
 import { RingBuffer } from "./ring-buffer.js";
 
 interface ServiceConfig {
@@ -57,6 +56,14 @@ function normalizeTrackDeg(trackDeg: number): number {
   return normalized < 0 ? normalized + 360 : normalized;
 }
 
+function normalizeCallsign(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const cleaned = value.trim().toUpperCase();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 function interpolatePosition(
   current: PositionSample,
   history: RingBuffer<PositionSample>,
@@ -94,13 +101,14 @@ function interpolatePosition(
 
 export class AircraftFeedService {
   private readonly tracks = new Map<string, FlightTrackState>();
+  private readonly destinationByAircraftId = new Map<string, string | null>();
+  private readonly destinationByCallsign = new Map<string, string | null>();
   private latest: AircraftFeedResponse;
   private timer: NodeJS.Timeout | null = null;
   private pollInFlight = false;
 
   constructor(
     private readonly adsbClient: AdsbLolClient,
-    private readonly fr24Client: Fr24Client,
     private readonly config: ServiceConfig
   ) {
     this.latest = {
@@ -149,7 +157,8 @@ export class AircraftFeedService {
         }
       }
 
-      const aircraft = await Promise.all(airborne.map((entry) => this.transformAircraft(entry, now)));
+      await this.hydrateDestinations(airborne);
+      const aircraft = airborne.map((entry) => this.transformAircraft(entry, now));
       this.latest = {
         updatedAtMs: now,
         center: { ...this.config.center },
@@ -163,7 +172,7 @@ export class AircraftFeedService {
     }
   }
 
-  private async transformAircraft(aircraft: AdsbAircraft, now: number): Promise<AircraftFeedItem> {
+  private transformAircraft(aircraft: AdsbAircraft, now: number): AircraftFeedItem {
     const existing = this.tracks.get(aircraft.id) ?? {
       current: null,
       previous: new RingBuffer<PositionSample>(5)
@@ -199,16 +208,75 @@ export class AircraftFeedService {
       altitudeAmslFt: aircraft.altitudeAmslFt,
       onGround: aircraft.onGround,
       squawk: aircraft.squawk,
-      destinationIata: await this.getDestination(aircraft),
+      destinationIata: this.getDestination(aircraft),
       position: current,
       previousPositions: existing.previous.toArray()
     };
   }
 
-  private async getDestination(aircraft: AdsbAircraft): Promise<string | null> {
-    if (!this.fr24Client.isEnabled()) {
+  private getDestination(aircraft: AdsbAircraft): string | null {
+    const byId = this.destinationByAircraftId.get(aircraft.id);
+    if (byId !== undefined) {
+      return byId;
+    }
+    const callsign = normalizeCallsign(aircraft.callsign);
+    if (!callsign) {
       return null;
     }
-    return this.fr24Client.getCachedDestination(aircraft);
+    return this.destinationByCallsign.get(callsign) ?? null;
+  }
+
+  private async hydrateDestinations(aircraft: AdsbAircraft[]): Promise<void> {
+    const toResolve: Array<{ callsign: string; lat: number; lon: number }> = [];
+    const seenCallsigns = new Set<string>();
+
+    for (const entry of aircraft) {
+      if (this.destinationByAircraftId.has(entry.id)) {
+        continue;
+      }
+
+      const callsign = normalizeCallsign(entry.callsign);
+      if (!callsign) {
+        continue;
+      }
+
+      const cachedByCallsign = this.destinationByCallsign.get(callsign);
+      if (cachedByCallsign !== undefined) {
+        this.destinationByAircraftId.set(entry.id, cachedByCallsign);
+        continue;
+      }
+
+      if (seenCallsigns.has(callsign)) {
+        continue;
+      }
+      seenCallsigns.add(callsign);
+      toResolve.push({
+        callsign,
+        lat: entry.lat,
+        lon: entry.lon
+      });
+    }
+
+    if (toResolve.length > 0) {
+      try {
+        const resolved = await this.adsbClient.fetchDestinationsByCallsign(toResolve);
+        for (const [callsign, destinationIata] of resolved) {
+          this.destinationByCallsign.set(callsign, destinationIata);
+        }
+      } catch (error) {
+        console.error("[destinations] unable to update ADSB.lol routes cache", error);
+      }
+    }
+
+    for (const entry of aircraft) {
+      if (this.destinationByAircraftId.has(entry.id)) {
+        continue;
+      }
+      const callsign = normalizeCallsign(entry.callsign);
+      if (!callsign) {
+        continue;
+      }
+      this.destinationByAircraftId.set(entry.id, this.destinationByCallsign.get(callsign) ?? null);
+    }
   }
 }

@@ -20,6 +20,13 @@ export interface BlipDrawInput extends BlipRuleInput {
   radiusPx?: number;
 }
 
+export interface Vfr1200BlipDrawInput {
+  x: number;
+  y: number;
+  squawk: string | null;
+  trackDeg: number | null;
+}
+
 export interface BlipColors {
   searchTargetBlue: string;
   histBlue1: string;
@@ -65,6 +72,10 @@ export interface BlipHistoryDrawOptions {
   dotRadiusPx?: number;
   maxDots?: number;
   projectPosition?: (position: PositionSample) => BlipProjectedPoint | null;
+}
+
+function toRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180;
 }
 
 function normalizeTcpLetter(value: string | null): string | null {
@@ -126,6 +137,9 @@ const BLIP_SYMBOL_CHARCODE: Record<Exclude<BlipCenterGlyphKind, "letter">, numbe
   star: 138
 };
 
+const VFR_BODY_SHORT_SIDE_PX = 6;
+const VFR_BODY_LONG_SIDE_PX = 16;
+
 function drawLetterGlyph(
   ctx: CanvasRenderingContext2D,
   fonts: BlipFonts,
@@ -167,6 +181,26 @@ function drawSymbolGlyph(
   return true;
 }
 
+function drawSymbolGlyphPinnedCenter(
+  ctx: CanvasRenderingContext2D,
+  fonts: BlipFonts,
+  centerX: number,
+  centerY: number,
+  glyphCode: number,
+  fillColor: string,
+  haloColor: string
+): boolean {
+  const outlineMetric = fonts.outline.metrics[glyphCode];
+  const fillMetric = fonts.fill.metrics[glyphCode];
+  if (!outlineMetric || !fillMetric) {
+    return false;
+  }
+
+  drawTintedGlyphBoxCentered(ctx, fonts.outline, outlineMetric, centerX, centerY, haloColor);
+  drawTintedGlyphBoxCentered(ctx, fonts.fill, fillMetric, centerX, centerY, fillColor);
+  return true;
+}
+
 function drawTintedGlyphFromAtlas(
   ctx: CanvasRenderingContext2D,
   font: LoadedBitmapFont,
@@ -182,6 +216,50 @@ function drawTintedGlyphFromAtlas(
   // Compute top-left render position using the same vertical metric system as drawBitmapText.
   const x = Math.round(centerX - metric.w / 2 - metric.offX);
   const y = Math.round(centerY - metric.h / 2 - (font.height - metric.offY - metric.h));
+
+  const offscreen = document.createElement("canvas");
+  offscreen.width = metric.w;
+  offscreen.height = metric.h;
+  const offCtx = offscreen.getContext("2d");
+  if (!offCtx) {
+    return;
+  }
+
+  offCtx.imageSmoothingEnabled = false;
+  offCtx.clearRect(0, 0, metric.w, metric.h);
+  offCtx.drawImage(
+    font.atlas,
+    metric.sx,
+    metric.sy,
+    metric.w,
+    metric.h,
+    0,
+    0,
+    metric.w,
+    metric.h
+  );
+  offCtx.globalCompositeOperation = "source-in";
+  offCtx.fillStyle = tintColor;
+  offCtx.fillRect(0, 0, metric.w, metric.h);
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(offscreen, x, y);
+}
+
+function drawTintedGlyphBoxCentered(
+  ctx: CanvasRenderingContext2D,
+  font: LoadedBitmapFont,
+  metric: { sx: number; sy: number; w: number; h: number; offX: number; offY: number },
+  centerX: number,
+  centerY: number,
+  tintColor: string
+): void {
+  if (metric.w <= 0 || metric.h <= 0) {
+    return;
+  }
+
+  const x = Math.round(centerX - metric.w / 2);
+  const y = Math.round(centerY - metric.h / 2);
 
   const offscreen = document.createElement("canvas");
   offscreen.width = metric.w;
@@ -235,14 +313,53 @@ export class RadarBlipRenderer {
 
   static async create(colors: Partial<BlipColors> = {}): Promise<RadarBlipRenderer> {
     const [fill, outline] = await Promise.all([
-      loadBitmapFont("/font/sddCharFontSetASize1"),
-      loadBitmapFont("/font/sddCharOutlineFontSetASize1")
+      loadBitmapFont("/public/font/sddCharFontSetASize1"),
+      loadBitmapFont("/public/font/sddCharOutlineFontSetASize1")
     ]);
 
     return new RadarBlipRenderer(
       { fill, outline },
       { ...DEFAULT_COLORS, ...colors }
     );
+  }
+
+  drawVfr1200(ctx: CanvasRenderingContext2D, input: Vfr1200BlipDrawInput): boolean {
+    const squawk = (input.squawk ?? "").trim();
+    if (squawk !== "1200") {
+      return false;
+    }
+
+    // Long side is perpendicular to track, short side parallel to track.
+    const trackDeg = Number.isFinite(input.trackDeg) ? (input.trackDeg as number) : 0;
+    const longAxisAngleRad = toRadians(trackDeg);
+    const halfLong = VFR_BODY_LONG_SIDE_PX * 0.5;
+    const halfShort = VFR_BODY_SHORT_SIDE_PX * 0.5;
+
+    ctx.save();
+    ctx.translate(input.x, input.y);
+    ctx.rotate(longAxisAngleRad);
+    ctx.fillStyle = this.colors.searchTargetBlue;
+    ctx.fillRect(-halfLong, -halfShort, VFR_BODY_LONG_SIDE_PX, VFR_BODY_SHORT_SIDE_PX);
+    ctx.restore();
+
+    // Draw a green square with black halo at target center via outline atlas.
+    const rendered = drawSymbolGlyphPinnedCenter(
+      ctx,
+      this.fonts,
+      input.x,
+      input.y,
+      BLIP_SYMBOL_CHARCODE.square,
+      this.colors.green,
+      this.colors.black
+    );
+    if (!rendered) {
+      // Fallback if square glyph code is absent in the atlas.
+      ctx.fillStyle = this.colors.black;
+      ctx.fillRect(Math.round(input.x - 3), Math.round(input.y - 3), 6, 6);
+      ctx.fillStyle = this.colors.green;
+      ctx.fillRect(Math.round(input.x - 2), Math.round(input.y - 2), 4, 4);
+    }
+    return true;
   }
 
   draw(ctx: CanvasRenderingContext2D, input: BlipDrawInput): BlipResolvedCenterGlyph {
@@ -289,10 +406,11 @@ export class RadarBlipRenderer {
 
     const dotRadiusPx = options.dotRadiusPx ?? 2;
     const maxDots = Math.max(1, Math.min(5, options.maxDots ?? 5));
-    const recentFirst = [...positions].slice(-maxDots).reverse();
+    // Backend history is oldest -> newest; color by recency so nearest trail point is HIST_BLUE_1.
+    const ordered = [...positions].slice(-maxDots).reverse();
 
-    for (let index = 0; index < recentFirst.length; index += 1) {
-      const position = recentFirst[index];
+    for (let index = 0; index < ordered.length; index += 1) {
+      const position = ordered[index];
       let point: BlipProjectedPoint | null;
 
       if (isPositionSample(position)) {

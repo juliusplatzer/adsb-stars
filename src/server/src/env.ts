@@ -2,9 +2,8 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_HTTP_PORT = 8080;
 const DEFAULT_ADSBLOL_BASE_URL = "https://api.adsb.lol";
 const DEFAULT_ADSBLOL_SEARCH_PATH = "/v2/lat/{lat}/lon/{lon}/dist/{radius}";
-const DEFAULT_FR24_BASE_URL = "https://fr24api.flightradar24.com";
-const DEFAULT_FR24_LIVE_FULL_PATH = "/api/live/flight-positions/full";
-const DEFAULT_FR24_ACCEPT_VERSION = "v1";
+const DEFAULT_ADSBLOL_ROUTESET_PATH = "/api/0/routeset/";
+const DEFAULT_ADSBLOL_ROUTESET_BATCH_SIZE = 50;
 const DEFAULT_AVWX_BASE_URL = "https://aviationweather.gov";
 const DEFAULT_AVWX_METAR_PATH = "/api/data/metar";
 const DEFAULT_AVWX_CACHE_TTL_MS = 60_000;
@@ -22,13 +21,8 @@ export interface ServerConfig {
   adsbLol: {
     baseUrl: string;
     searchPathTemplate: string;
-  };
-  fr24: {
-    baseUrl: string;
-    liveFullPath: string;
-    apiToken: string | null;
-    acceptVersion: string;
-    bounds: string;
+    routeSetPath: string;
+    routeSetBatchSize: number;
   };
   aviationWeather: {
     baseUrl: string;
@@ -40,7 +34,6 @@ export interface ServerConfig {
     maxCells: number | null;
     requestChunkSize: number;
   };
-  scopeConfigName: string | null;
 }
 
 function readRequiredNumber(envKey: string): number {
@@ -84,27 +77,6 @@ function readOptionalNumberOrNull(envKey: string, fallback: number): number | nu
   return parsed;
 }
 
-function readOptionalString(envKey: string): string | null {
-  const value = process.env[envKey];
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function boundsFromCenter(centerLat: number, centerLon: number, radiusNm: number): string {
-  const latDelta = radiusNm / 60;
-  const lonScale = Math.cos((centerLat * Math.PI) / 180);
-  const lonDelta = lonScale > 0.000001 ? radiusNm / (60 * lonScale) : 180;
-  const north = Math.min(90, centerLat + latDelta);
-  const south = Math.max(-90, centerLat - latDelta);
-  const west = Math.max(-180, centerLon - lonDelta);
-  const east = Math.min(180, centerLon + lonDelta);
-  const format = (value: number): string => value.toFixed(3);
-  return `${format(north)},${format(south)},${format(west)},${format(east)}`;
-}
-
 export function loadConfig(): ServerConfig {
   const centerLat = readRequiredNumber("CENTER_LAT");
   const centerLon = readRequiredNumber("CENTER_LON");
@@ -118,14 +90,9 @@ export function loadConfig(): ServerConfig {
     radiusNm,
     adsbLol: {
       baseUrl: process.env.ADSBLOL_BASE_URL ?? DEFAULT_ADSBLOL_BASE_URL,
-      searchPathTemplate: process.env.ADSBLOL_SEARCH_PATH_TEMPLATE ?? DEFAULT_ADSBLOL_SEARCH_PATH
-    },
-    fr24: {
-      baseUrl: process.env.FR24_BASE_URL ?? DEFAULT_FR24_BASE_URL,
-      liveFullPath: process.env.FR24_LIVE_FULL_PATH ?? DEFAULT_FR24_LIVE_FULL_PATH,
-      apiToken: process.env.FR24_API_TOKEN ?? process.env.FR24_API_KEY ?? null,
-      acceptVersion: process.env.FR24_ACCEPT_VERSION ?? DEFAULT_FR24_ACCEPT_VERSION,
-      bounds: process.env.FR24_BOUNDS ?? boundsFromCenter(centerLat, centerLon, radiusNm)
+      searchPathTemplate: process.env.ADSBLOL_SEARCH_PATH_TEMPLATE ?? DEFAULT_ADSBLOL_SEARCH_PATH,
+      routeSetPath: process.env.ADSBLOL_ROUTESET_PATH ?? DEFAULT_ADSBLOL_ROUTESET_PATH,
+      routeSetBatchSize: readOptionalNumber("ADSBLOL_ROUTESET_BATCH_SIZE", DEFAULT_ADSBLOL_ROUTESET_BATCH_SIZE)
     },
     aviationWeather: {
       baseUrl: process.env.AWX_BASE_URL ?? DEFAULT_AVWX_BASE_URL,
@@ -136,7 +103,6 @@ export function loadConfig(): ServerConfig {
       samplesUrl: process.env.WX_REFLECTIVITY_SAMPLES_URL ?? DEFAULT_WX_SAMPLES_URL,
       maxCells: readOptionalNumberOrNull("WX_REFLECTIVITY_MAX_CELLS", DEFAULT_WX_MAX_CELLS),
       requestChunkSize: readOptionalNumber("WX_REFLECTIVITY_REQUEST_CHUNK_SIZE", DEFAULT_WX_REQUEST_CHUNK_SIZE)
-    },
-    scopeConfigName: readOptionalString("SCOPE_CONFIG_NAME")
+    }
   };
 }

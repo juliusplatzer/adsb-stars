@@ -1,53 +1,115 @@
-### adsb-stars
+# vstars
 
-View ADS-B and MLAT flight traffic data in real-time on a STARS-like radar scope.
+STARS-style radar scope demo with:
 
-#### Installation
+- real-time aircraft feed from ADSB.lol,
+- optional FAA SWIM ingest (TAIS + ITWS) via Java consumers,
+- Node/TypeScript API for aircraft, QNH, flight-rules SSE, and weather radar,
+- TypeScript canvas frontend demo.
+
+## Prerequisites
+
+- Node.js 20+ (tested with Node 24)
+- pnpm 9+
+- Python 3 (for serving the demo page)
+- Optional: Java 17 + Maven (for SWIM consumers in `src/server/src/java`)
+
+## Install
+
+From repo root:
 
 ```bash
 pnpm install
 pnpm -r build
 ```
 
-#### Server feed
+## Configure server env
 
-`src/server` now provides a polling feed service that:
+1. Copy server env template:
 
-- polls ADSB.lol every 5 seconds (configurable),
-- enriches each aircraft with RECAT wake category (A-I, NOWGT, UNKNOWN),
-- resolves destination IATA via FR24 inbound-airport preloads and caches it,
-- tracks last 5 previous positions per flight id,
-- interpolates position when ADS-B returns the same coordinates on consecutive polls.
+```bash
+cp src/server/.env.example src/server/.env
+```
 
-Expose endpoint:
-
-- `GET /api/aircraft`
-- `GET /api/qnh?icao=KJFK&icao=KLAX` (also supports `?ids=KJFK,KLAX`)
-- `GET /api/wx/radar?lat=40.64&lon=-73.78&radiusNm=80` (radius is capped at `150` NM)
-
-Required env vars for `@vstars/server`:
+2. Set at least:
 
 - `CENTER_LAT`
 - `CENTER_LON`
 - `RADIUS_NM`
 
-See `src/server/.env.example` for a ready-to-copy template.
+3. If you use Java ingest, ensure token values match between Node server (`src/server/.env`) and Java env (`src/server/src/java/.env`):
 
-Optional env vars:
+- Flight rules: `TAIS_INGEST_TOKEN`
+- WX ingest: `WX_INGEST_TOKEN` (or `ITWS_INGEST_TOKEN`)
 
-- `PORT` (default `8080`)
-- `POLL_INTERVAL_MS` (default `5000`)
-- `ADSBLOL_BASE_URL` (default `https://api.adsb.lol`)
-- `ADSBLOL_SEARCH_PATH_TEMPLATE` (default `/v2/lat/{lat}/lon/{lon}/dist/{radius}`)
-- `FR24_BASE_URL` (default `https://fr24api.flightradar24.com`)
-- `FR24_LIVE_FULL_PATH` (default `/api/live/flight-positions/full`)
-- `FR24_API_TOKEN` (Bearer token for FR24)
-- `FR24_ACCEPT_VERSION` (default `v1`)
-- `FR24_BOUNDS` (`north,south,west,east`; default derived from center/radius, 3 decimals)
-- `SCOPE_CONFIG_NAME` (e.g. `N90` to load `src/client/data/configs/N90.json` and preload inbound flights)
-- `AWX_BASE_URL` (default `https://aviationweather.gov`)
-- `AWX_METAR_PATH` (default `/api/data/metar`)
-- `AWX_CACHE_TTL_MS` (default `60000`)
-- `WX_REFLECTIVITY_SAMPLES_URL` (default NOAA MRMS reflectivity `getSamples` endpoint)
-- `WX_REFLECTIVITY_MAX_CELLS` (default `40000`, set to `0` or `null` to disable)
-- `WX_REFLECTIVITY_REQUEST_CHUNK_SIZE` (default `1000`)
+## Run (core app)
+
+Use two terminals from repo root.
+
+Terminal 1 (API server):
+
+```bash
+pnpm --filter @vstars/server dev
+```
+
+Terminal 2 (frontend demo):
+
+```bash
+pnpm --filter @vstars/client demo
+```
+
+Open:
+
+- `http://localhost:4173/demo.html`
+
+## Optional: run SWIM Java consumers
+
+If you are ingesting live TAIS/ITWS data:
+
+```bash
+cd src/server
+source ./src/java/.env
+mvn -q -DskipTests package
+```
+
+Run each consumer in its own terminal:
+
+```bash
+cd src/server
+source ./src/java/.env
+java -jar target/tais-json-consumer-0.1.0.jar
+```
+
+```bash
+cd src/server
+source ./src/java/.env
+java -jar target/itws-json-consumer-0.1.0.jar
+```
+
+## API endpoints
+
+- `GET /health`
+- `GET /api/aircraft`
+- `GET /api/qnh?icao=KJFK&icao=KLAX` (or `?ids=KJFK,KLAX`)
+- `GET /api/flightRules` (SSE)
+- `POST /api/flightRules` (token-protected ingest)
+- `GET /api/wx/radar`
+- `POST /api/wx/radar` (token-protected ingest)
+
+Notes:
+
+- `GET /api/wx/radar` returns ingested ITWS payload if present.
+- If no ingest payload exists, it falls back to NOAA sampling and requires:
+  - `lat`
+  - `lon`
+  - `radiusNm` (capped at 150 NM)
+
+## Quick checks
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/api/aircraft
+curl "http://localhost:8080/api/qnh?icao=KJFK"
+curl "http://localhost:8080/api/wx/radar?lat=40.64&lon=-73.78&radiusNm=80"
+```
+
